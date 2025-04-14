@@ -1,14 +1,10 @@
 import os
-input_folder = os.environ.get('INPUT_FOLDER')
-output_folder = os.environ.get('OUTPUT_FOLDER')
-
-import os
 import pandas as pd
 import re
 
 # Définir le répertoire contenant les fichiers CSV
 input_directory = os.path.dirname(os.path.abspath(__file__))
-output_directory = os.path.join(input_directory, "output_folder")
+output_directory = os.path.join(input_directory, "merged_files")
 os.makedirs(output_directory, exist_ok=True)
 
 # Charger tous les fichiers CSV dans le dossier
