@@ -1,6 +1,10 @@
 import os
-input_folder = os.environ.get('INPUT_FOLDER')
-output_folder = os.environ.get('OUTPUT_FOLDER')
+
+input_folder = os.environ.get("INPUT_FOLDER")
+output_folder = os.environ.get("OUTPUT_FOLDER")
+
+print("📥 input_folder =", input_folder)
+print("📤 output_folder =", output_folder)
 
 import os
 import pandas as pd
