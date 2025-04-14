@@ -15,8 +15,9 @@ def main():
     env["INPUT_FOLDER"] = input_folder
     env["OUTPUT_FOLDER"] = output_folder
 
-    print("📥 INPUT_FOLDER :", input_folder)
-    print("📤 OUTPUT_FOLDER :", output_folder)
+    print("🚀 Main.py lancé avec :")
+    print("INPUT_FOLDER =", input_folder)
+    print("OUTPUT_FOLDER =", output_folder)
 
     subprocess.run(['python', 'MergeCSV.py'], check=True, env=env)
     subprocess.run(['python', 'transformationxlsx.py'], check=True, env=env)

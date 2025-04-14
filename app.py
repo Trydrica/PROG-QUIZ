@@ -26,6 +26,7 @@ def upload_files():
             return jsonify({'error': 'Aucun fichier reçu'}), 400
 
         for file in files:
+            print("Fichier reçu :", file.filename)
             file.save(os.path.join(UPLOAD_FOLDER, file.filename))
 
         print("📂 UPLOAD_FOLDER:", UPLOAD_FOLDER)
@@ -35,7 +36,11 @@ def upload_files():
         env["INPUT_FOLDER"] = UPLOAD_FOLDER
         env["OUTPUT_FOLDER"] = OUTPUT_FOLDER
 
-        subprocess.run(['python', 'Main.py', UPLOAD_FOLDER, OUTPUT_FOLDER], check=True, env=env)
+        try:
+            subprocess.run(['python', 'Main.py', UPLOAD_FOLDER, OUTPUT_FOLDER], check=True, env=env)
+        except subprocess.CalledProcessError as e:
+            print("❌ Erreur pendant l’exécution de Main.py :", e)
+            return jsonify({'error': 'Échec du traitement dans Main.py'}), 500
 
         print("🧾 Contenu OUTPUT_FOLDER :", os.listdir(OUTPUT_FOLDER))
 
