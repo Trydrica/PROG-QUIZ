@@ -1,10 +1,13 @@
+
 import os
 import tempfile
 import zipfile
 import subprocess
 from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 BASE_DIR = tempfile.mkdtemp()
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 OUTPUT_FOLDER = os.path.join(BASE_DIR, "output")
