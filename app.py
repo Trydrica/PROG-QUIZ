@@ -17,7 +17,23 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 @app.route('/')
 def home():
     return "🚀 Backend Flask en ligne et opérationnel !"
+@app.route('/upload', methods=['POST'])
+def upload_files():
+    try:
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'error': 'Aucun fichier reçu'}), 400
 
+        for file in files:
+            print(f"Fichier reçu : {file.filename}")  # <-- log utile
+
+        # (Optionnel) retourne un test pour voir si ça passe
+        return jsonify({'message': 'Fichiers reçus avec succès'}), 200
+
+    except Exception as e:
+        print("Erreur dans /upload :", e)  # <-- trace dans Render logs
+        return jsonify({'error': str(e)}), 500
+        
 @app.route('/upload', methods=['POST'])
 def upload_files():
     files = request.files.getlist('files')
