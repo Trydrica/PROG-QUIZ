@@ -10,9 +10,7 @@ document.getElementById('processBtn').addEventListener('click', async () => {
       formData.append('files', file);
     }
   
-    const response = await fetch('/upload', {
-      method: 'POST',
-      body: formData
+    const response = await fetch('https://csv-to-excel-backend.onrender.com/upload', {      body: formData
     });
   
     if (response.ok) {
