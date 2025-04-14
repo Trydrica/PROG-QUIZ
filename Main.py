@@ -10,18 +10,15 @@ def main():
     input_folder = sys.argv[1]
     output_folder = sys.argv[2]
 
-    # Définir les variables d’environnement à passer aux autres scripts
+    # Passer les chemins comme variables d’environnement
     env = os.environ.copy()
     env["INPUT_FOLDER"] = input_folder
     env["OUTPUT_FOLDER"] = output_folder
 
-    # Appeler MergeCSV.py avec les mêmes variables d’environnement
     subprocess.run(['python', 'MergeCSV.py'], check=True, env=env)
+    subprocess.run(['python', 'transformationxlsx.py'], check=True, env=env)
 
-    # Puis transformationxlsx_old.py
-    subprocess.run(['python', 'transformationxlsx_old.py'], check=True, env=env)
-
-    print("Traitement terminé.")
+    print("✅ Traitement terminé")
 
 if __name__ == "__main__":
     main()
