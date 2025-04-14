@@ -4,5 +4,5 @@ services:
     env: python
     plan: free
     buildCommand: ""
-    startCommand: "python app.py"
+    startCommand: "gunicorn app:app"
     autoDeploy: true
