@@ -4,6 +4,11 @@ import os
 import tempfile
 import zipfile
 import subprocess
+import glob
+import os
+
+for pyc_file in glob.glob("*.pyc") + glob.glob("__pycache__/*.pyc"):
+    os.remove(pyc_file)
 
 app = Flask(__name__)
 CORS(app)
