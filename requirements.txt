@@ -3,10 +3,3 @@ flask-cors
 gunicorn
 pandas
 openpyxl
-pandas-profiling
-jinja2
-flask-jwt-extended
-flask-sqlalchemy
-flask-migrate
-flask-marshmallow
-flask-restful
