@@ -1,19 +1,11 @@
 import os
-
-input_folder = os.environ.get("INPUT_FOLDER")
-output_folder = os.environ.get("OUTPUT_FOLDER")
-
-print("📥 input_folder =", input_folder)
-print("📤 output_folder =", output_folder)
-
-import os
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Border, Side, Alignment
 from datetime import datetime
 
-# Chemin du dossier contenant les fichiers merged_files
-directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "merged_files")
+# Chemin du dossier contenant les fichiers output_folder
+directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_folder")
 
 # Vérifier si le dossier existe
 if not os.path.exists(directory):
@@ -23,7 +15,7 @@ if not os.path.exists(directory):
 file_list = [file for file in os.listdir(directory) if file.endswith('.xlsx')]
 
 if not file_list:
-    raise FileNotFoundError("Aucun fichier Excel trouvé dans le dossier 'merged_files'.")
+    raise FileNotFoundError("Aucun fichier Excel trouvé dans le dossier 'output_folder'.")
 
 # Traiter chaque fichier un par un
 for file_name in file_list:
