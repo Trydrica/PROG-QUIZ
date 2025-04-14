@@ -11,6 +11,10 @@ OUTPUT_FOLDER = os.path.join(BASE_DIR, "output")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+@app.route('/')
+def home():
+    return "🚀 Backend Flask en ligne et opérationnel !"
+
 @app.route('/upload', methods=['POST'])
 def upload_files():
     files = request.files.getlist('files')
@@ -53,6 +57,3 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
-@app.route('/')
-def home():
-    return "🚀 Backend Flask en ligne et opérationnel !"
