@@ -4,11 +4,7 @@ import os
 import tempfile
 import zipfile
 import subprocess
-import glob
-import os
 
-for pyc_file in glob.glob("*.pyc") + glob.glob("__pycache__/*.pyc"):
-    os.remove(pyc_file)
 
 app = Flask(__name__)
 CORS(app)
@@ -66,6 +62,12 @@ def upload_files():
         print("❌ Erreur dans /upload :", e)
         return jsonify({'error': str(e)}), 500
 
+import sys
+
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    if len(sys.argv) > 1:
+        port = int(sys.argv[1])
+    else:
+        port = int(os.environ.get("PORT", 5000))
+
     app.run(host='0.0.0.0', port=port)
