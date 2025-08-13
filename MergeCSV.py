@@ -5,26 +5,30 @@ import os
 import re
 import csv
 from io import BytesIO
-from typing import Optional, List
+from typing import List
+from datetime import datetime
 
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
-# -------------------------------------------------------------------
-# RÉPERTOIRES D’ENTRÉE/SORTIE
-# -------------------------------------------------------------------
-# Si Main.py a défini INPUT_FOLDER / OUTPUT_FOLDER, on les utilise.
-# Sinon, on retombe sur l’ancien comportement : dossier du script et "merged_files".
+# ============================================================
+# RÉPERTOIRES & PARAMÈTRES
+# ============================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_DIR = os.environ.get("INPUT_FOLDER", SCRIPT_DIR)
 OUTPUT_DIR = os.environ.get("OUTPUT_FOLDER", os.path.join(SCRIPT_DIR, "merged_files"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -------------------------------------------------------------------
+# Année de création : FINAL_YEAR (env) ou année courante
+FINAL_YEAR = os.environ.get("FINAL_YEAR")
+if not FINAL_YEAR:
+    FINAL_YEAR = str(datetime.now().year)
+
+# ============================================================
 # UTILITAIRES
-# -------------------------------------------------------------------
+# ============================================================
 def read_csv_robust(path: str) -> pd.DataFrame:
     """
     Lecture robuste d'un CSV :
@@ -40,34 +44,52 @@ def read_csv_robust(path: str) -> pd.DataFrame:
             last_err = e
     raise ValueError(f'Lecture CSV "{os.path.basename(path)}" impossible : {last_err}')
 
-def extract_group_from_filename(filename: str) -> Optional[int]:
+def build_final_name_from_first_csv(csv_filename: str) -> str:
     """
-    Extrait un groupe 10/20/30… à partir d'un code 4 chiffres dans le nom.
-    ex. quiz-1001.csv -> 10 ; abc_2033.csv -> 20 ; sinon None.
+    csv_filename ex: '1001_IEC et sartans.csv'
+    -> '1001_IEC_et_sartans_biblio_2025.xlsx'  (année selon FINAL_YEAR)
     """
-    m = re.search(r"(\d{4})", filename)
-    return int(m.group(1)[:2]) if m else None
+    base_noext = os.path.splitext(csv_filename)[0]
+    parts = base_noext.split("_", 1)
+    if len(parts) == 2:
+        numero, titre = parts
+    else:
+        numero, titre = parts[0], "quiz"
+    # Nettoyage du titre -> underscores
+    titre_slug = "_".join(t.strip() for t in titre.strip().split())
+    # Sécurisation basique du numéro (garde 4 premiers chiffres si présents)
+    m = re.match(r"^(\d{4})", numero)
+    numero_clean = m.group(1) if m else numero.strip()
+    return f"{numero_clean}_{titre_slug}_biblio_{FINAL_YEAR}.xlsx"
 
-def write_xlsx_with_format(df: pd.DataFrame, out_path: str, sheet_name: str = "Données") -> None:
+def write_xlsx_with_format(df: pd.DataFrame, out_path: str, sheet_name: str = "Fusion") -> None:
     """
     Écrit un DataFrame en .xlsx + quelques mises en forme utiles :
       - Freeze en-tête (A2)
-      - Auto-filtre sur la ligne d'entête
-      - Largeurs de colonnes usuelles (si les titres existent)
+      - Auto-filtre
+      - Largeurs de colonnes usuelles si présentes
       - Wrap text pour colonnes longues (Question/Réponse/Feedback)
     """
+    # Colonnes préférées en tête si elles existent
+    preferred = [
+        "Numéro", "Nom", "Question", "Type de question",
+        "Réponse", "Valide", "Importante", "Feedback", "source_fichier"
+    ]
+    cols = [c for c in preferred if c in df.columns] + [c for c in df.columns if c not in preferred]
+    df = df[cols]
+
     with pd.ExcelWriter(out_path, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name=sheet_name)
 
     wb = load_workbook(out_path)
     ws = wb[sheet_name]
 
-    # Figer l’entête + filtre
+    # Figer l’entête & filtre
     ws.freeze_panes = "A2"
     last_col_letter = get_column_letter(ws.max_column)
     ws.auto_filter.ref = f"A1:{last_col_letter}1"
 
-    # Largeurs courantes (adapter si besoin à tes entêtes exactes)
+    # Largeurs courantes (adapter si besoin)
     column_widths = {
         "Numéro": 10,
         "Nom": 30,
@@ -77,6 +99,7 @@ def write_xlsx_with_format(df: pd.DataFrame, out_path: str, sheet_name: str = "D
         "Valide": 10,
         "Importante": 14,
         "Feedback": 140,
+        "source_fichier": 28,
     }
     headers = [c.value if c.value is not None else "" for c in ws[1]]
     header_to_idx = {str(name): i + 1 for i, name in enumerate(headers)}
@@ -86,8 +109,7 @@ def write_xlsx_with_format(df: pd.DataFrame, out_path: str, sheet_name: str = "D
             ws.column_dimensions[get_column_letter(idx)].width = width
 
     # Wrap text sur colonnes longues
-    wrap_cols = {"Question", "Réponse", "Feedback"}
-    for col_name in wrap_cols:
+    for col_name in {"Question", "Réponse", "Feedback"}:
         idx = header_to_idx.get(col_name)
         if idx:
             for row in ws.iter_rows(min_row=2, min_col=idx, max_col=idx):
@@ -97,54 +119,44 @@ def write_xlsx_with_format(df: pd.DataFrame, out_path: str, sheet_name: str = "D
     wb.save(out_path)
     wb.close()
 
-# -------------------------------------------------------------------
-# TRAITEMENT
-# -------------------------------------------------------------------
+# ============================================================
+# TRAITEMENT — UN SEUL FICHIER FINAL
+# ============================================================
 def main() -> None:
-    # 1) lister les CSV à traiter
     csv_files: List[str] = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(".csv")]
     if not csv_files:
         print(f"Aucun .csv trouvé dans : {INPUT_DIR}")
         return
 
-    global_dfs: List[pd.DataFrame] = []
-    per_group: dict[int, List[pd.DataFrame]] = {}
+    csv_files_sorted = sorted(csv_files)
+    first_csv = csv_files_sorted[0]
+    final_name = build_final_name_from_first_csv(first_csv)
+    final_path = os.path.join(OUTPUT_DIR, final_name)
 
-    # 2) pour chaque CSV : lire, ajouter une colonne source, écrire un .xlsx individuel
-    for name in sorted(csv_files):
+    # Nettoie d’anciens xlsx pour repartir propre
+    for name in os.listdir(OUTPUT_DIR):
+        p = os.path.join(OUTPUT_DIR, name)
+        if os.path.isfile(p) and name.lower().endswith(".xlsx"):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
+    frames: List[pd.DataFrame] = []
+    for name in csv_files_sorted:
         src_path = os.path.join(INPUT_DIR, name)
         df = read_csv_robust(src_path)
-
-        # garde la trace de la source
+        # Conserver la source (utile pour audit)
         df.insert(0, "source_fichier", name)
+        frames.append(df)
 
-        # Excel individuel
-        base = os.path.splitext(name)[0]
-        out_indiv = os.path.join(OUTPUT_DIR, f"{base}.xlsx")
-        write_xlsx_with_format(df, out_indiv, sheet_name="Données")
-        print(f"✅ Fichier Excel créé : {out_indiv}")
+    fusion = pd.concat(frames, axis=0, ignore_index=True, sort=False)
+    write_xlsx_with_format(fusion, final_path, sheet_name="Fusion")
 
-        global_dfs.append(df)
+    # Expose le nom choisi pour le script de transformation (optionnel)
+    os.environ["FINAL_XLSX_NAME"] = final_name
 
-        grp = extract_group_from_filename(name)
-        if grp is not None:
-            per_group.setdefault(grp, []).append(df)
-
-    # 3) fusion globale
-    if global_dfs:
-        fusion_all = pd.concat(global_dfs, axis=0, ignore_index=True, sort=False)
-        out_fusion = os.path.join(OUTPUT_DIR, "fusion_globale.xlsx")
-        write_xlsx_with_format(fusion_all, out_fusion, sheet_name="Fusion")
-        print(f"✅ Fusion globale : {out_fusion}")
-
-    # 4) fusions par groupe (10/20/30…)
-    for grp, dfs in sorted(per_group.items()):
-        fusion_g = pd.concat(dfs, axis=0, ignore_index=True, sort=False)
-        out_grp = os.path.join(OUTPUT_DIR, f"Group_{grp}.xlsx")
-        write_xlsx_with_format(fusion_g, out_grp, sheet_name=f"Groupe{grp:02d}")
-        print(f"✅ Fusion groupe {grp:02d} : {out_grp}")
-
-    print(f"\nTerminé. Fichiers disponibles dans : {OUTPUT_DIR}")
+    print(f"✅ Fichier final généré : {final_path}")
 
 if __name__ == "__main__":
     main()
