@@ -1,62 +1,150 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
-import pandas as pd
 import re
+import csv
+from io import BytesIO
+from typing import Optional, List
 
-# Définir le répertoire contenant les fichiers CSV
-input_directory = os.path.dirname(os.path.abspath(__file__))
-output_directory = os.path.join(input_directory, "merged_files")
-os.makedirs(output_directory, exist_ok=True)
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
 
-# Charger tous les fichiers CSV dans le dossier
-all_files = [f for f in os.listdir(input_directory) if f.endswith('.csv')]
+# -------------------------------------------------------------------
+# RÉPERTOIRES D’ENTRÉE/SORTIE
+# -------------------------------------------------------------------
+# Si Main.py a défini INPUT_FOLDER / OUTPUT_FOLDER, on les utilise.
+# Sinon, on retombe sur l’ancien comportement : dossier du script et "merged_files".
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_DIR = os.environ.get("INPUT_FOLDER", SCRIPT_DIR)
+OUTPUT_DIR = os.environ.get("OUTPUT_FOLDER", os.path.join(SCRIPT_DIR, "merged_files"))
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Fonction pour extraire le préfixe numérique (10xx, 20xx, 30xx, etc.)
-def extract_group_number(filename):
-    match = re.search(r'\D*(\d{2})\d{2}', filename)
-    return int(match.group(1)) if match else None
-
-# Créer un dictionnaire pour regrouper les fichiers par préfixe numérique
-files_by_group = {}
-
-for file in all_files:
-    group_number = extract_group_number(file)
-    if group_number is not None:
-        if group_number not in files_by_group:
-            files_by_group[group_number] = []
-        files_by_group[group_number].append(file)
-    else:
-        print(f"Fichier ignoré : {file} (pas de préfixe valide trouvé)")
-
-# Fusionner les fichiers pour chaque groupe numérique
-for group, files in files_by_group.items():
-    merged_df = pd.DataFrame()
-    sorted_files = sorted(files, key=lambda x: int(re.search(r'(\d+)', x).group(1)))
-
-    print(f"Fusion des fichiers pour le groupe {group} : {files}")
-    for file in sorted_files:
-        file_path = os.path.join(input_directory, file)
+# -------------------------------------------------------------------
+# UTILITAIRES
+# -------------------------------------------------------------------
+def read_csv_robust(path: str) -> pd.DataFrame:
+    """
+    Lecture robuste d'un CSV :
+      - détection auto du séparateur via sep=None + engine='python'
+      - essais d'encodage : utf-8-sig, utf-8, latin-1, cp1252
+      - dtype=str pour préserver les zéros initiaux
+    """
+    last_err = None
+    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
         try:
-            df = pd.read_csv(file_path)
-            merged_df = pd.concat([merged_df, df], ignore_index=True)
+            return pd.read_csv(path, sep=None, engine="python", encoding=enc, dtype=str)
         except Exception as e:
-            print(f"Erreur lors de la lecture de {file}: {e}")
+            last_err = e
+    raise ValueError(f'Lecture CSV "{os.path.basename(path)}" impossible : {last_err}')
 
-    if not merged_df.empty:
-        try:
-            # Sauvegarder chaque groupe dans un fichier Excel séparé
-            output_file = os.path.join(output_directory, f"Group_{group}.xlsx")
-            merged_df.to_excel(output_file, index=False)
-            print(f"Fichier créé : {output_file}")
-        except Exception as e:
-            print(f"Erreur lors de la sauvegarde du fichier pour le groupe {group}: {e}")
-    else:
-        print(f"Aucune donnée fusionnée pour le groupe {group}")
+def extract_group_from_filename(filename: str) -> Optional[int]:
+    """
+    Extrait un groupe 10/20/30… à partir d'un code 4 chiffres dans le nom.
+    ex. quiz-1001.csv -> 10 ; abc_2033.csv -> 20 ; sinon None.
+    """
+    m = re.search(r"(\d{4})", filename)
+    return int(m.group(1)[:2]) if m else None
 
-import os
-output_file = "/Users/romainpoulin/.../Group_20.xlsx"
-if not os.path.exists(output_file):
-    print(f"Erreur : le fichier {output_file} n'a pas été créé.")
-else:
-    print(f"Le fichier {output_file} a bien été créé.")
+def write_xlsx_with_format(df: pd.DataFrame, out_path: str, sheet_name: str = "Données") -> None:
+    """
+    Écrit un DataFrame en .xlsx + quelques mises en forme utiles :
+      - Freeze en-tête (A2)
+      - Auto-filtre sur la ligne d'entête
+      - Largeurs de colonnes usuelles (si les titres existent)
+      - Wrap text pour colonnes longues (Question/Réponse/Feedback)
+    """
+    with pd.ExcelWriter(out_path, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name=sheet_name)
 
-print(f"Les fichiers CSV ont été fusionnés et enregistrés dans le dossier : {output_directory}")
+    wb = load_workbook(out_path)
+    ws = wb[sheet_name]
+
+    # Figer l’entête + filtre
+    ws.freeze_panes = "A2"
+    last_col_letter = get_column_letter(ws.max_column)
+    ws.auto_filter.ref = f"A1:{last_col_letter}1"
+
+    # Largeurs courantes (adapter si besoin à tes entêtes exactes)
+    column_widths = {
+        "Numéro": 10,
+        "Nom": 30,
+        "Question": 140,
+        "Type de question": 24,
+        "Réponse": 70,
+        "Valide": 10,
+        "Importante": 14,
+        "Feedback": 140,
+    }
+    headers = [c.value if c.value is not None else "" for c in ws[1]]
+    header_to_idx = {str(name): i + 1 for i, name in enumerate(headers)}
+    for col_name, width in column_widths.items():
+        idx = header_to_idx.get(col_name)
+        if idx:
+            ws.column_dimensions[get_column_letter(idx)].width = width
+
+    # Wrap text sur colonnes longues
+    wrap_cols = {"Question", "Réponse", "Feedback"}
+    for col_name in wrap_cols:
+        idx = header_to_idx.get(col_name)
+        if idx:
+            for row in ws.iter_rows(min_row=2, min_col=idx, max_col=idx):
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    wb.save(out_path)
+    wb.close()
+
+# -------------------------------------------------------------------
+# TRAITEMENT
+# -------------------------------------------------------------------
+def main() -> None:
+    # 1) lister les CSV à traiter
+    csv_files: List[str] = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(".csv")]
+    if not csv_files:
+        print(f"Aucun .csv trouvé dans : {INPUT_DIR}")
+        return
+
+    global_dfs: List[pd.DataFrame] = []
+    per_group: dict[int, List[pd.DataFrame]] = {}
+
+    # 2) pour chaque CSV : lire, ajouter une colonne source, écrire un .xlsx individuel
+    for name in sorted(csv_files):
+        src_path = os.path.join(INPUT_DIR, name)
+        df = read_csv_robust(src_path)
+
+        # garde la trace de la source
+        df.insert(0, "source_fichier", name)
+
+        # Excel individuel
+        base = os.path.splitext(name)[0]
+        out_indiv = os.path.join(OUTPUT_DIR, f"{base}.xlsx")
+        write_xlsx_with_format(df, out_indiv, sheet_name="Données")
+        print(f"✅ Fichier Excel créé : {out_indiv}")
+
+        global_dfs.append(df)
+
+        grp = extract_group_from_filename(name)
+        if grp is not None:
+            per_group.setdefault(grp, []).append(df)
+
+    # 3) fusion globale
+    if global_dfs:
+        fusion_all = pd.concat(global_dfs, axis=0, ignore_index=True, sort=False)
+        out_fusion = os.path.join(OUTPUT_DIR, "fusion_globale.xlsx")
+        write_xlsx_with_format(fusion_all, out_fusion, sheet_name="Fusion")
+        print(f"✅ Fusion globale : {out_fusion}")
+
+    # 4) fusions par groupe (10/20/30…)
+    for grp, dfs in sorted(per_group.items()):
+        fusion_g = pd.concat(dfs, axis=0, ignore_index=True, sort=False)
+        out_grp = os.path.join(OUTPUT_DIR, f"Group_{grp}.xlsx")
+        write_xlsx_with_format(fusion_g, out_grp, sheet_name=f"Groupe{grp:02d}")
+        print(f"✅ Fusion groupe {grp:02d} : {out_grp}")
+
+    print(f"\nTerminé. Fichiers disponibles dans : {OUTPUT_DIR}")
+
+if __name__ == "__main__":
+    main()
