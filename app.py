@@ -1,84 +1,98 @@
-# Imports à compléter en haut du fichier
-import re
-import csv
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import tempfile
+import zipfile
 from io import BytesIO
-import pandas as pd
-from flask import Flask, request, send_file, jsonify
+from datetime import datetime
 
-@app.route('/upload', methods=['POST'])
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+
+# --- important : on importe le pipeline exact défini dans Main.py ---
+# process_folder(input_dir, output_dir) -> (list_xlsx_individuels, list_xlsx_fusions)
+from Main import process_folder
+
+app = Flask(__name__)
+
+# Limite (optionnelle) : 50 Mo par requête
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
+# CORS : autorise ton front (GitHub Pages) + localhost pour tests
+CORS(app, resources={
+    r"/upload": {
+        "origins": [
+            "https://trydrica.github.io",
+            "https://*.github.io",
+            "http://localhost",
+            "http://localhost:*",
+            "http://127.0.0.1:*"
+        ]
+    },
+    r"/": {"origins": "*"}
+})
+
+
+@app.route("/", methods=["GET"])
+def health():
+    return "🚀 Backend Flask en ligne et opérationnel !", 200
+
+
+@app.route("/upload", methods=["POST"])
 def upload_files():
+    """
+    Reçoit plusieurs CSV, lance le pipeline Main.process_folder(),
+    puis renvoie un ZIP contenant :
+      - tous les .xlsx individuels
+      - fusion_globale.xlsx
+      - Group_xx.xlsx (si applicable)
+    """
     try:
-        files = request.files.getlist('files')
+        files = request.files.getlist("files")
         if not files:
-            return jsonify({'error': 'Aucun fichier reçu'}), 400
+            return jsonify({"error": "Aucun fichier reçu"}), 400
 
-        mem_zip = BytesIO()
-        global_rows = []
-        group_buckets = {}  # p.ex. {10: [df1, df2], 20: [df3], ...}
-
-        def read_csv_robust(raw_bytes, filename):
-            """Lecture robuste : délimiteur auto, encodage tolérant."""
-            last_err = None
-            for enc in ("utf-8-sig", "utf-8", "latin-1"):
-                try:
-                    sample = raw_bytes[:4096].decode(enc, errors='ignore')
-                    try:
-                        dialect = csv.Sniffer().sniff(sample)
-                        sep = dialect.delimiter
-                    except Exception:
-                        sep = None  # laisse pandas inférer
-                    return pd.read_csv(BytesIO(raw_bytes), sep=sep, engine='python', encoding=enc)
-                except Exception as e:
-                    last_err = e
-            raise ValueError(f'Lecture CSV "{filename}" impossible: {last_err}')
-
-        with zipfile.ZipFile(mem_zip, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        # Répertoires temporaires isolés par requête
+        with tempfile.TemporaryDirectory() as in_dir, tempfile.TemporaryDirectory() as out_dir:
+            # 1) Sauvegarde des CSV reçus
             for f in files:
-                raw = f.read()
-                df = read_csv_robust(raw, f.filename)
+                # sécurité basique sur le nom et écriture
+                fname = f.filename or "file.csv"
+                dest = os.path.join(in_dir, fname)
+                f.save(dest)
 
-                # Ajoute la source pour tracer l’origine après fusion
-                df.insert(0, 'source_fichier', f.filename)
+            # 2) Lancer le pipeline EXACT (Main.py)
+            #    -> crée les .xlsx individuels + fusion_globale + Group_xx dans out_dir
+            indiv_paths, fusion_paths = process_folder(in_dir, out_dir)
 
-                # 1) Écrire l’Excel individuel
-                xbuf = BytesIO()
-                with pd.ExcelWriter(xbuf, engine='openpyxl') as w:
-                    df.to_excel(w, index=False, sheet_name='Données')
-                xbuf.seek(0)
-                indiv_name = os.path.splitext(f.filename)[0] + '.xlsx'
-                zf.writestr(indiv_name, xbuf.getvalue())
+            # 3) Zipper tout ce qui est produit (individuels + fusions)
+            mem_zip = BytesIO()
+            with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                # Ajoute d'abord les individuels (tri pour déterminisme)
+                for p in sorted(indiv_paths):
+                    zf.write(p, arcname=os.path.basename(p))
+                # Puis les fusions
+                for p in sorted(fusion_paths):
+                    zf.write(p, arcname=os.path.basename(p))
 
-                # 2) Alimente la fusion globale
-                global_rows.append(df)
-
-                # 3) Bucket par groupe 10/20/30… (extrait les 4 chiffres du nom)
-                m = re.search(r'(\d{4})', f.filename)
-                if m:
-                    group = int(m.group(1)[:2])  # 1001 -> 10, 2003 -> 20
-                    group_buckets.setdefault(group, []).append(df)
-
-            # 4) Fusion globale (outer → on garde toutes les colonnes possibles)
-            if global_rows:
-                fusion_all = pd.concat(global_rows, axis=0, ignore_index=True, sort=False)
-                xbuf = BytesIO()
-                with pd.ExcelWriter(xbuf, engine='openpyxl') as w:
-                    fusion_all.to_excel(w, index=False, sheet_name='Fusion')
-                xbuf.seek(0)
-                zf.writestr('fusion_globale.xlsx', xbuf.getvalue())
-
-            # 5) Fusions par groupe (si applicables)
-            for group, dfs in group_buckets.items():
-                fusion_g = pd.concat(dfs, axis=0, ignore_index=True, sort=False)
-                xbuf = BytesIO()
-                with pd.ExcelWriter(xbuf, engine='openpyxl') as w:
-                    fusion_g.to_excel(w, index=False, sheet_name=f'Groupe{group}')
-                xbuf.seek(0)
-                zf.writestr(f'Group_{group}.xlsx', xbuf.getvalue())
-
-        mem_zip.seek(0)
-        return send_file(mem_zip, as_attachment=True,
-                         download_name='resultats.zip', mimetype='application/zip')
+            mem_zip.seek(0)
+            # Nom de zip horodaté (optionnel)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            return send_file(
+                mem_zip,
+                as_attachment=True,
+                download_name=f"resultats-{ts}.zip",
+                mimetype="application/zip",
+            )
 
     except Exception as e:
+        # Log minimal en console (visible sur Render)
         print("Erreur dans /upload :", e)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    # Port imposé par l’hébergeur (Render) ou 5000 en local
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
