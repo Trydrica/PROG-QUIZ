@@ -2,24 +2,21 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
 import tempfile
 import zipfile
 from io import BytesIO
 from datetime import datetime
+import subprocess
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-# --- important : on importe le pipeline exact défini dans Main.py ---
-# process_folder(input_dir, output_dir) -> (list_xlsx_individuels, list_xlsx_fusions)
-from Main import process_folder
-
 app = Flask(__name__)
-
 # Limite (optionnelle) : 50 Mo par requête
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
-# CORS : autorise ton front (GitHub Pages) + localhost pour tests
+# Autorise ton front (GitHub Pages) + localhost
 CORS(app, resources={
     r"/upload": {
         "origins": [
@@ -42,42 +39,60 @@ def health():
 @app.route("/upload", methods=["POST"])
 def upload_files():
     """
-    Reçoit plusieurs CSV, lance le pipeline Main.process_folder(),
-    puis renvoie un ZIP contenant :
-      - tous les .xlsx individuels
-      - fusion_globale.xlsx
-      - Group_xx.xlsx (si applicable)
+    Reçoit plusieurs CSV, exécute Main.py <input_dir> <output_dir>,
+    puis renvoie un ZIP contenant exactement les fichiers produits par Main.py
+    (individuels + fusion_globale + Group_xx + toute mise en forme spécifique).
     """
     try:
         files = request.files.getlist("files")
         if not files:
             return jsonify({"error": "Aucun fichier reçu"}), 400
 
-        # Répertoires temporaires isolés par requête
+        # Dossiers temporaires isolés par requête
         with tempfile.TemporaryDirectory() as in_dir, tempfile.TemporaryDirectory() as out_dir:
-            # 1) Sauvegarde des CSV reçus
+            # 1) Sauvegarde des CSV uploadés
             for f in files:
-                # sécurité basique sur le nom et écriture
                 fname = f.filename or "file.csv"
                 dest = os.path.join(in_dir, fname)
                 f.save(dest)
 
-            # 2) Lancer le pipeline EXACT (Main.py)
-            #    -> crée les .xlsx individuels + fusion_globale + Group_xx dans out_dir
-            indiv_paths, fusion_paths = process_folder(in_dir, out_dir)
+            # 2) Lancer TON pipeline local identique : Main.py <in_dir> <out_dir>
+            #    - sys.executable garantit le bon interpréteur (Render/venv)
+            #    - cwd=repo root pour que Main.py retrouve ses imports/scripts voisins
+            cmd = [sys.executable, "-u", "Main.py", in_dir, out_dir]
+            proc = subprocess.run(
+                cmd,
+                cwd=os.getcwd(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=600  # 10 min de marge si gros fichiers
+            )
 
-            # 3) Zipper tout ce qui est produit (individuels + fusions)
+            if proc.returncode != 0:
+                # On renvoie les logs pour debug côté front si besoin
+                return jsonify({
+                    "error": "Échec lors de l'exécution de Main.py",
+                    "stdout": proc.stdout[-4000:],  # tronqué pour éviter la surcharge
+                    "stderr": proc.stderr[-4000:]
+                }), 500
+
+            # 3) Zipper tout ce que Main.py a produit dans out_dir
+            produced = [f for f in os.listdir(out_dir) if os.path.isfile(os.path.join(out_dir, f))]
+            if not produced:
+                return jsonify({
+                    "error": "Aucun fichier de sortie généré par Main.py",
+                    "stdout": proc.stdout[-4000:],
+                    "stderr": proc.stderr[-4000:]
+                }), 500
+
             mem_zip = BytesIO()
             with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-                # Ajoute d'abord les individuels (tri pour déterminisme)
-                for p in sorted(indiv_paths):
-                    zf.write(p, arcname=os.path.basename(p))
-                # Puis les fusions
-                for p in sorted(fusion_paths):
-                    zf.write(p, arcname=os.path.basename(p))
+                for name in sorted(produced):
+                    full = os.path.join(out_dir, name)
+                    zf.write(full, arcname=name)
 
             mem_zip.seek(0)
-            # Nom de zip horodaté (optionnel)
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
             return send_file(
                 mem_zip,
@@ -86,8 +101,9 @@ def upload_files():
                 mimetype="application/zip",
             )
 
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout lors de l'exécution de Main.py (600s)."}), 504
     except Exception as e:
-        # Log minimal en console (visible sur Render)
         print("Erreur dans /upload :", e)
         return jsonify({"error": str(e)}), 500
 
