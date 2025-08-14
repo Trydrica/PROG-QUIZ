@@ -14,7 +14,7 @@ MERGE_SCRIPT = os.path.join(BASE_DIR, "MergeCSV.py")
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 Mo
 
-# Autoriser ton front (GitHub Pages) + localhost
+# Autorise le front + expose Content-Disposition (pour que le JS récupère le nom)
 CORS(app, resources={
     r"/upload": {
         "origins": [
@@ -26,7 +26,7 @@ CORS(app, resources={
         ]
     },
     r"/": {"origins": "*"}
-})
+}, expose_headers=["Content-Disposition", "Content-Type"])
 
 @app.route("/", methods=["GET"])
 def health():
@@ -39,9 +39,8 @@ def upload_files():
         if not files:
             return jsonify({"error": "Aucun fichier reçu"}), 400
 
-        # Dossiers temporaires isolés par requête
         with tempfile.TemporaryDirectory() as in_dir, tempfile.TemporaryDirectory() as out_dir:
-            # 1) Sauvegarde des CSV reçus
+            # 1) Sauvegarde CSV
             for f in files:
                 name = f.filename or "file.csv"
                 if not name.lower().endswith(".csv"):
@@ -61,9 +60,8 @@ def upload_files():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=600  # 10 minutes
+                timeout=600
             )
-
             if proc.returncode != 0:
                 return jsonify({
                     "error": "Échec lors de l'exécution de MergeCSV.py",
@@ -71,8 +69,8 @@ def upload_files():
                     "stderr": proc.stderr[-4000:]
                 }), 500
 
-            # 3) Récupère l'unique .xlsx produit
-            xlsx_files = [f for f in os.listdir(out_dir) if f.lower().endswith(".xlsx")]
+            # 3) Récupère l’Excel produit
+            xlsx_files = sorted([f for f in os.listdir(out_dir) if f.lower().endswith(".xlsx")])
             if not xlsx_files:
                 return jsonify({
                     "error": "Aucun fichier Excel généré",
@@ -80,11 +78,10 @@ def upload_files():
                     "stderr": proc.stderr[-4000:]
                 }), 500
 
-            xlsx_files.sort()
             final_name = xlsx_files[0]
             final_path = os.path.join(out_dir, final_name)
 
-            # 4) Renvoie DIRECTEMENT l'Excel (pas de ZIP)
+            # 4) Envoi DIRECT de l'Excel avec son nom (header exposé côté CORS)
             return send_file(
                 final_path,
                 as_attachment=True,
@@ -98,8 +95,6 @@ def upload_files():
         print("Erreur /upload :", e)
         return jsonify({"error": str(e)}), 500
 
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # En prod Render, utilise gunicorn (voir render.yaml); ceci sert pour un test local.
     app.run(host="0.0.0.0", port=port)

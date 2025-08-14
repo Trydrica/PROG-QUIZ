@@ -21,20 +21,23 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 FINAL_YEAR = os.environ.get("FINAL_YEAR") or "2025"  # mets str(datetime.now().year) si tu veux dynamique
 
-# Colonnes à retirer du rendu final (feuille QUIZ)
+# Colonnes retirées de la feuille QUIZ
 DROP_COLUMNS = {"Numéro", "Nom", "Importante", "source_fichier"}
 
 # Largeurs de colonnes EXACTES demandées
 FIXED_COLUMN_WIDTHS = {
-    "Question": 50,     # largeur Excel
+    "Question": 50,
     "Réponse": 30,
     "Valide": 10,
     "Feedback": 140,
     "NbCar Feedback": 16,
 }
 
-# Colonnes à fusion visuelle si valeurs identiques consécutives
+# Colonnes à fusionner visuellement si identiques consécutives
 MERGE_VISUAL_COLS = ["Question", "Feedback"]
+
+# Hauteur des lignes en points (on applique 150 comme demandé)
+ROW_HEIGHT_POINTS = 150.0
 
 
 # =========================
@@ -49,8 +52,12 @@ def read_csv_robust(path: str) -> pd.DataFrame:
             last_err = e
     raise ValueError(f'Lecture CSV "{os.path.basename(path)}" impossible : {last_err}')
 
+def sanitize_filename(name: str) -> str:
+    # Conserver accents et parenthèses, retirer caractères interdits par le FS
+    return re.sub(r'[\\/:*?"<>|]', " ", name).strip()
+
 def build_final_name_from_content(df_first: pd.DataFrame) -> str:
-    """Construit '3001_Antirétroviraux (1)_biblio_2025.xlsx' depuis 'Numéro' + 'Nom' du 1er CSV."""
+    """Construit '3001_NomDuQuiz_biblio_2025.xlsx' depuis 'Numéro' + 'Nom' du 1er CSV (contenu)."""
     # Numéro (4 premiers chiffres si possible)
     numero = None
     if "Numéro" in df_first.columns:
@@ -62,7 +69,7 @@ def build_final_name_from_content(df_first: pd.DataFrame) -> str:
     m = re.match(r"^(\d{4})", str(numero))
     numero_clean = m.group(1) if m else str(numero).strip()
 
-    # Titre — on garde accents et parenthèses, on compresse les espaces
+    # Titre — garder accents/parenthèses, compresser espaces
     titre = None
     if "Nom" in df_first.columns:
         s = df_first["Nom"].dropna().astype(str).str.strip().replace("", pd.NA).dropna()
@@ -72,7 +79,8 @@ def build_final_name_from_content(df_first: pd.DataFrame) -> str:
         titre = "quiz"
     titre = re.sub(r"\s+", " ", str(titre)).strip()
 
-    return f"{numero_clean}_{titre}_biblio_{FINAL_YEAR}.xlsx"
+    final_name = f"{numero_clean}_{titre}_biblio_{FINAL_YEAR}.xlsx"
+    return sanitize_filename(final_name)
 
 def _normalize_text(s: str) -> str:
     if s is None:
@@ -85,7 +93,7 @@ def _normalize_text(s: str) -> str:
     return s.strip()
 
 def normalize_df_key(df: pd.DataFrame) -> pd.Series:
-    """Clé de déduplication normalisée sur toutes les colonnes restantes (insensible à la casse)."""
+    """Clé de déduplication normalisée sur toutes les colonnes (insensible à la casse)."""
     cols = []
     for c in df.columns:
         cols.append(df[c].fillna("").astype(str).map(_normalize_text).str.lower())
@@ -99,7 +107,7 @@ def normalize_df_key(df: pd.DataFrame) -> pd.Series:
 # Écriture / Mise en forme
 # =========================
 def write_quiz_sheet(wb: Workbook, df: pd.DataFrame) -> None:
-    """Crée/écrit la feuille QUIZ : données + format + fusion + hauteurs/largeurs exactes + formules."""
+    """Crée la feuille QUIZ : données + format + fusion + hauteurs/largeurs + formule LEN."""
     ws = wb.active
     ws.title = "QUIZ"
 
@@ -109,22 +117,21 @@ def write_quiz_sheet(wb: Workbook, df: pd.DataFrame) -> None:
     for row in df.itertuples(index=False, name=None):
         ws.append(row)
 
-    # Map nom->index
     header_map = {name: i + 1 for i, name in enumerate(headers)}
 
-    # 2) Format de base : gel volets + filtre
+    # 2) Gel des volets + filtre
     ws.freeze_panes = "A2"
     last_col_letter = get_column_letter(ws.max_column)
     ws.auto_filter.ref = f"A1:{last_col_letter}1"
 
-    # 3) Hauteur de lignes (2..N) et alignement (wrap + left/center)
+    # 3) Hauteur lignes (2..N) + alignement/wrap
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-        ws.row_dimensions[row[0].row].height = 150
+        ws.row_dimensions[row[0].row].height = ROW_HEIGHT_POINTS
         for cell in row:
             if cell.value is not None:
                 cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
 
-    # 4) Largeurs de colonnes EXACTES
+    # 4) Largeurs fixes
     for col_name, width in FIXED_COLUMN_WIDTHS.items():
         idx = header_map.get(col_name)
         if idx:
@@ -141,7 +148,7 @@ def write_quiz_sheet(wb: Workbook, df: pd.DataFrame) -> None:
         for cell in row:
             cell.border = thin
 
-    # 6) Fusion VISUELLE des cellules identiques consécutives (normalisées, non vides)
+    # 6) Fusion visuelle (identiques consécutives, normalisées, non vides)
     def merge_consecutive(col_name: str):
         idx = header_map.get(col_name)
         if not idx or ws.max_row < 3:
@@ -187,33 +194,32 @@ def write_quiz_sheet(wb: Workbook, df: pd.DataFrame) -> None:
     for col in MERGE_VISUAL_COLS:
         merge_consecutive(col)
 
-    # 7) Formule =LEN(Feedback) dans "NbCar Feedback" (Excel FR affiche NBCAR)
-    headers = [c.value if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    header_to_idx = {name: i + 1 for i, name in enumerate(headers)}
-    c_feedback = header_to_idx.get("Feedback")
-    c_len = header_to_idx.get("NbCar Feedback")
+    # 7) Formule LEN(Feedback) -> "NbCar Feedback"
+    headers_now = [c.value if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    h2idx = {name: i + 1 for i, name in enumerate(headers_now)}
+    c_feedback = h2idx.get("Feedback")
+    c_len = h2idx.get("NbCar Feedback")
     if c_feedback and c_len:
         colF = get_column_letter(c_feedback)
         for r in range(2, ws.max_row + 1):
-            ws.cell(row=r, column=c_len).value = f"=LEN({colF}{r})"  # NBCAR en FR
+            ws.cell(row=r, column=c_len).value = f"=LEN({colF}{r})"  # Excel FR => NBCAR
 
 
 # =========================
 # Pipeline principal
 # =========================
 def main():
-    # 1) CSV attendus (tu enverras par paires, mais n>2 supporté)
     csv_files: List[str] = sorted([f for f in os.listdir(INPUT_DIR) if f.lower().endswith(".csv")])
     if not csv_files:
         print(f"Aucun CSV trouvé dans {INPUT_DIR}")
         return
 
-    # 2) Nom final d'après le CONTENU du 1er CSV
+    # Nom final d'après CONTENU du 1er CSV
     df_first = read_csv_robust(os.path.join(INPUT_DIR, csv_files[0]))
     final_name = build_final_name_from_content(df_first)
     final_path = os.path.join(OUTPUT_DIR, final_name)
 
-    # 3) Nettoie anciens .xlsx
+    # Nettoie anciens .xlsx
     for name in os.listdir(OUTPUT_DIR):
         p = os.path.join(OUTPUT_DIR, name)
         if os.path.isfile(p) and name.lower().endswith(".xlsx"):
@@ -222,37 +228,36 @@ def main():
             except Exception:
                 pass
 
-    # 4) Fusionne tous les CSV fournis
+    # Fusionne tous les CSV fournis (tu les envoies par paires)
     frames: List[pd.DataFrame] = [df_first]
     for name in csv_files[1:]:
         frames.append(read_csv_robust(os.path.join(INPUT_DIR, name)))
     fusion = pd.concat(frames, axis=0, ignore_index=True, sort=False)
 
-    # 5) Retire les colonnes inutiles
+    # Retire colonnes inutiles
     fusion = fusion[[c for c in fusion.columns if c not in DROP_COLUMNS]]
 
-    # 6) Déduplication intelligente (normalisée sur colonnes restantes)
+    # Dédup “intelligente”
     key = normalize_df_key(fusion)
     fusion = fusion.loc[~key.duplicated(keep="first")].reset_index(drop=True)
 
-    # 7) Ajout colonne NbCar Feedback (placeholder; la formule sera posée ensuite)
+    # Ajout NbCar Feedback si Feedback existe
     if "Feedback" in fusion.columns and "NbCar Feedback" not in fusion.columns:
         fusion["NbCar Feedback"] = 0
 
-    # 8) Ordre des colonnes
+    # Ordre colonnes
     preferred = ["Question", "Type de question", "Réponse", "Valide", "Feedback", "NbCar Feedback"]
     fusion = fusion[[c for c in preferred if c in fusion.columns] + [c for c in fusion.columns if c not in preferred]]
 
-    # 9) Écriture finale : QUIZ formaté + BIBLIOGRAPHIE vide
+    # Écriture finale : QUIZ + BIBLIOGRAPHIE vide
     wb = Workbook()
     write_quiz_sheet(wb, fusion)
     wb.create_sheet(title="BIBLIOGRAPHIE")
     wb.save(final_path)
     wb.close()
 
-    # Expose le nom si besoin en aval
     os.environ["FINAL_XLSX_NAME"] = final_name
-    print(f"✅ Fichier final généré : {final_path}")
+    print(f"✅ Fichier final généré :", final_path)
 
 if __name__ == "__main__":
     main()
