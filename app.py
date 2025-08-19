@@ -15,18 +15,20 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 Mo
 
 # Autorise le front + expose Content-Disposition (pour que le JS récupère le nom)
-CORS(app, resources={
-    r"/upload": {
-        "origins": [
-            "https://trydrica.github.io",
-            "https://*.github.io",
-            "http://localhost",
-            "http://localhost:*",
-            "http://127.0.0.1:*",
-        ]
-    },
-    r"/": {"origins": "*"}
-}, expose_headers=["Content-Disposition", "Content-Type"])
+
+CORS(
+    app,
+    resources={r"/*": {"origins": [
+        "https://trydrica.github.io",
+        "https://*.github.io",
+        "http://localhost",
+        "http://localhost:*",
+        "http://127.0.0.1:*",
+    ]}},
+    supports_credentials=False,
+    expose_headers=["Content-Disposition", "Content-Type"]
+)
+
 
 @app.route("/", methods=["GET"])
 def health():
