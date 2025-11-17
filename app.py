@@ -53,7 +53,7 @@ def upload_files():
             env = os.environ.copy()
             env["INPUT_FOLDER"] = in_dir
             env["OUTPUT_FOLDER"] = out_dir
-            env.setdefault("FINAL_YEAR", "2026")
+            env.setdefault("FINAL_YEAR", "2025")
 
             proc = subprocess.run(
                 [sys.executable, "-u", MERGE_SCRIPT],
