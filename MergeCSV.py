@@ -34,8 +34,6 @@ INPUT_DIR = os.environ.get("INPUT_FOLDER", SCRIPT_DIR)
 OUTPUT_DIR = os.environ.get("OUTPUT_FOLDER", os.path.join(SCRIPT_DIR, "merged_files"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-FINAL_YEAR = os.environ.get("FINAL_YEAR") or "2025"
-
 # Colonnes retirées de la feuille QUIZ
 DROP_COLUMNS = {"Numéro", "Nom", "Importante", "source_fichier"}
 
